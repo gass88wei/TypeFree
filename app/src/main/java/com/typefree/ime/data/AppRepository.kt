@@ -6,6 +6,7 @@ import android.text.InputType
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
+import com.typefree.ime.audio.WavAudioRecorder
 import com.typefree.ime.ime.jev.memory.AnchorSaltProvider
 import com.typefree.ime.ime.jev.memory.AndroidKeystoreSaltProvider
 import com.typefree.ime.ime.jev.memory.ConversationAnchorExtractor
@@ -65,6 +66,11 @@ class AppRepository(
         pruneHistoryByRetention(loadHistoryInternal(), _settings.value.historyRetention)
     )
     val history: StateFlow<List<HistoryRecord>> = _history.asStateFlow()
+
+    init {
+        // 启动即按保留策略同步清理 voice WAV 归档，防止文本历史过期后音频副本仍留在磁盘
+        purgeVoiceHistoryArchive(_settings.value.historyRetention)
+    }
 
     private val _clipboardItems = MutableStateFlow(loadClipboardInternal())
     val clipboardItems: StateFlow<List<ClipboardEntry>> = _clipboardItems.asStateFlow()
@@ -531,6 +537,24 @@ class AppRepository(
                 _history.value = pruned
                 publicStore.putString(KEY_HISTORY, gson.toJson(pruned))
             }
+            purgeVoiceHistoryArchive(updated.historyRetention)
+        }
+    }
+
+    /**
+     * Deletes archived voice WAVs no longer covered by [retention] so expiring text history
+     * never leaves orphan audio copies on disk (FOREVER keeps everything, NEVER wipes all).
+     */
+    private fun purgeVoiceHistoryArchive(retention: HistoryRetention) {
+        val context = appContext ?: return
+        val maxAgeMs = retention.maxAgeMs ?: return // FOREVER
+        if (maxAgeMs == 0L) {
+            WavAudioRecorder.purgeVoiceHistoryArchive(context) // NEVER: wipe everything
+        } else {
+            WavAudioRecorder.purgeVoiceHistoryArchive(
+                context,
+                System.currentTimeMillis() - maxAgeMs
+            )
         }
     }
 
@@ -554,6 +578,8 @@ class AppRepository(
     fun clearHistory() {
         _history.value = emptyList()
         publicStore.remove(KEY_HISTORY)
+        // 清空文本历史的同时删除 voice WAV 归档，避免"历史已清空但音频副本仍留在磁盘"
+        appContext?.let { WavAudioRecorder.purgeVoiceHistoryArchive(it) }
     }
 
     fun deleteDictionaryEntries(ids: Set<String>) {

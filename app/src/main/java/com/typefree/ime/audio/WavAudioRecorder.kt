@@ -563,6 +563,27 @@ class WavAudioRecorder(private val context: Context) {
         }
 
         /**
+         * Deletes archived WAVs under `<filesDir>/voice_history/`: everything when [beforeMs] is
+         * null, otherwise only files whose `voice_<timestamp>_…` name prefix predates [beforeMs].
+         * The directory itself is kept so subsequent archives keep working.
+         */
+        fun purgeVoiceHistoryArchive(context: Context, beforeMs: Long? = null) {
+            val dir = File(context.filesDir, "voice_history")
+            if (!dir.isDirectory) return
+            dir.listFiles()?.forEach { file ->
+                val shouldDelete = if (beforeMs == null) {
+                    true
+                } else {
+                    val ts = file.name.removePrefix("voice_").substringBefore('_').toLongOrNull()
+                    ts != null && ts < beforeMs
+                }
+                if (shouldDelete) {
+                    runCatching { file.delete() }
+                }
+            }
+        }
+
+        /**
          * Multi-frame speech VAD decision: filters single-frame mechanical button/screen clicks
          * while allowing soft whispers (>= 3 voiced frames, ~135ms) or crisp short words (>= 2 consecutive strong frames).
          */
