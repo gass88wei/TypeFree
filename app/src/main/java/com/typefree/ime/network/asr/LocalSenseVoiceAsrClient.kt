@@ -81,30 +81,6 @@ class LocalSenseVoiceAsrClient(private val appContext: Context) : StreamingAsrCl
             }
         }
 
-        /** Loads (or returns) the process-wide offline recognizer. Blocking; call off the main thread. */
-        private fun acquireRecognizer(): OfflineRecognizer {
-            sharedRecognizer?.let { return it }
-            synchronized(recognizerMutex) {
-                sharedRecognizer?.let { return it }
-                val config = OfflineRecognizerConfig(
-                    modelConfig = OfflineModelConfig(
-                        senseVoice = OfflineSenseVoiceModelConfig(
-                            model = MODEL_ASSET,
-                            language = "",
-                            useInverseTextNormalization = true
-                        ),
-                        tokens = TOKENS_ASSET,
-                        modelType = "sense-voice",
-                        numThreads = NUM_THREADS,
-                        provider = "cpu"
-                    )
-                )
-                val recognizer = OfflineRecognizer(assetManager = appContext.assets, config = config)
-                sharedRecognizer = recognizer
-                return recognizer
-            }
-        }
-
         private fun pcm16LeToFloat(pcm: ByteArray): FloatArray {
             val sampleCount = pcm.size / 2
             val out = FloatArray(sampleCount)
@@ -113,6 +89,30 @@ class LocalSenseVoiceAsrClient(private val appContext: Context) : StreamingAsrCl
                 out[i] = buffer.short / 32768.0f
             }
             return out
+        }
+    }
+
+    /** Loads (or returns) the process-wide offline recognizer. Blocking; call off the main thread. */
+    private fun acquireRecognizer(): OfflineRecognizer {
+        sharedRecognizer?.let { return it }
+        synchronized(recognizerMutex) {
+            sharedRecognizer?.let { return it }
+            val config = OfflineRecognizerConfig(
+                modelConfig = OfflineModelConfig(
+                    senseVoice = OfflineSenseVoiceModelConfig(
+                        model = MODEL_ASSET,
+                        language = "",
+                        useInverseTextNormalization = true
+                    ),
+                    tokens = TOKENS_ASSET,
+                    modelType = "sense-voice",
+                    numThreads = NUM_THREADS,
+                    provider = "cpu"
+                )
+            )
+            val recognizer = OfflineRecognizer(assetManager = appContext.assets, config = config)
+            sharedRecognizer = recognizer
+            return recognizer
         }
     }
 
