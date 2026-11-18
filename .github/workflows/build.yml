@@ -26,9 +26,11 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
-      - name: Fetch local offline ASR models (SenseVoice-Small int8 + silero VAD)
+      - name: Fetch local ASR build deps (sherpa-onnx AAR + SenseVoice-Small int8 + silero VAD)
         run: |
-          mkdir -p local_sherpa
+          mkdir -p app/libs local_sherpa
+          curl -L --retry 3 --retry-delay 5 -C - -o app/libs/sherpa-onnx-2.0.1.aar \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-2.0.1.aar
           curl -L --retry 3 --retry-delay 5 -C - -o /tmp/sensevoice.tar.bz2 \
             https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2
           tar -xjf /tmp/sensevoice.tar.bz2 -C /tmp
@@ -38,6 +40,7 @@ jobs:
             https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
           echo "===== local_sherpa ====="
           ls -la local_sherpa/
+          test -s app/libs/sherpa-onnx-2.0.1.aar
           test -s local_sherpa/model.int8.onnx
           test -s local_sherpa/tokens.txt
           test -s local_sherpa/silero_vad.onnx
