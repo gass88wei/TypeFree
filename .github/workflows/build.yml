@@ -26,6 +26,17 @@ jobs:
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
+      - name: Install CMake 4.0.2 (pinned by :rime module)
+        run: |
+          pip3 install --quiet cmake==4.0.2 || {
+            curl -L --retry 3 -C - -o /tmp/cmake.tar.gz \
+              https://github.com/Kitware/CMake/releases/download/v4.0.2/cmake-4.0.2-linux-x86_64.tar.gz
+            tar -xzf /tmp/cmake.tar.gz -C /opt
+            echo "/opt/cmake-4.0.2-linux-x86_64/bin" >> "$GITHUB_PATH"
+          }
+          cmake --version
+          cmake --version | grep -q "4.0.2" || { echo "CMake 4.0.2 not on PATH"; exit 1; }
+
       - name: Fetch local ASR build deps (sherpa-onnx AAR + SenseVoice-Small int8 + silero VAD)
         run: |
           mkdir -p app/libs local_sherpa
