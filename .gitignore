@@ -62,3 +62,4 @@ local_sherpa/
 
 # Log files
 *.log
+app/libs/*.aar
