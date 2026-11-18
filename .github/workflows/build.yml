@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   build:
+    # tag push 只做发布（复用 main 最新成功构建），不重复构建
+    if: github.ref_type != 'tag'
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -49,8 +51,6 @@ jobs:
           cp "/tmp/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/tokens.txt" local_sherpa/
           curl -L --retry 3 --retry-delay 5 -C - -o local_sherpa/silero_vad.onnx \
             https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
-          echo "===== local_sherpa ====="
-          ls -la local_sherpa/
           test -s app/libs/sherpa-onnx-2.0.1.aar
           test -s local_sherpa/model.int8.onnx
           test -s local_sherpa/tokens.txt
@@ -64,15 +64,10 @@ jobs:
           set -euo pipefail
           APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
           echo "Checking $APK"
-
-          # 1) APK must be a valid zip with a readable manifest
           unzip -t "$APK" > /dev/null
           BADGING="$("$ANDROID_HOME/build-tools/34.0.0/aapt2" dump badging "$APK")"
           echo "$BADGING" | grep -E "^package: name='com.typefree.ime'"
           echo "$BADGING" | grep -E "native-code: .*arm64-v8a"
-
-          # 2) GLIBC guard: every packaged native lib must not require GLIBC_2.36+
-          #    (Deepin 25 ships glibc 2.38; anything above 2.35 breaks desktop hosts)
           WORK=$(mktemp -d)
           unzip -o -q "$APK" 'lib/*/*.so' -d "$WORK"
           FAIL=0
@@ -83,14 +78,13 @@ jobs:
               MAJOR=${VER%%.*}; MINOR=${VER##*.}
               echo "$(basename "$so"): max ${MAXSYM}"
               if [ "$MAJOR" -gt 2 ] || { [ "$MAJOR" -eq 2 ] && [ "$MINOR" -gt 35 ]; }; then
-                echo "ERROR: $so requires GLIBC_${VER} > 2.35 — package would not load"
+                echo "ERROR: $so requires GLIBC_${VER} > 2.35 - package would not load"
                 FAIL=1
               fi
             else
               echo "$(basename "$so"): no GLIBC version deps (bionic/NDK) OK"
             fi
           done
-          # sherpa-onnx JNI must be present for the local offline engine
           test -f "$WORK/lib/arm64-v8a/libsherpa-onnx-jni.so"
           exit $FAIL
 
@@ -102,32 +96,85 @@ jobs:
           retention-days: 14
 
   release:
-    needs: build
+    # Reuses the latest green main build - tag publish takes ~1 minute, no rebuild
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     steps:
-      - name: Download APK artifact
+      - name: Locate latest successful main build and verify it matches this tag
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh run list --repo "$GITHUB_REPOSITORY" --branch main --workflow build.yml \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ -z "$RUN_ID" ]; then
+            echo "::error::No successful main build found - push main first"
+            exit 1
+          fi
+          BUILD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.head_sha')
+          if [ "$BUILD_SHA" != "${{ github.sha }}" ]; then
+            echo "::error::Latest main build ($BUILD_SHA) does not match tag commit (${{ github.sha }}). Tag the same commit that has a green main build."
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "Reusing artifact from run $RUN_ID (commit ${BUILD_SHA:0:7})"
+
+      - name: Download APK artifact from main build (no rebuild)
         uses: actions/download-artifact@v4
         with:
           name: TypeFree-apk
+          run-id: ${{ steps.find.outputs.run_id }}
+          github-token: ${{ github.token }}
           path: apk
+
+      - name: Re-verify APK (GLIBC guard on the exact release artifact, exits 1 on failure)
+        run: |
+          set -euo pipefail
+          APK=$(ls apk/*.apk | head -1)
+          echo "Verifying release artifact $APK"
+          unzip -t "$APK" > /dev/null
+          BADGING="$("$ANDROID_HOME/build-tools/34.0.0/aapt2" dump badging "$APK" 2>/dev/null || true)"
+          if [ -z "$BADGING" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq aapt > /dev/null
+            BADGING=$(aapt dump badging "$APK")
+          fi
+          echo "$BADGING" | grep -E "^package: name='com.typefree.ime'"
+          WORK=$(mktemp -d)
+          unzip -o -q "$APK" 'lib/*/*.so' -d "$WORK"
+          FAIL=0
+          for so in "$WORK"/lib/*/*.so; do
+            MAXSYM=$(readelf -V "$so" 2>/dev/null | grep -oE 'GLIBC_2\.[0-9]+' | sort -uV | tail -1 || true)
+            if [ -n "$MAXSYM" ]; then
+              VER=${MAXSYM#GLIBC_}
+              MAJOR=${VER%%.*}; MINOR=${VER##*.}
+              echo "$(basename "$so"): max ${MAXSYM}"
+              if [ "$MAJOR" -gt 2 ] || { [ "$MAJOR" -eq 2 ] && [ "$MINOR" -gt 35 ]; }; then
+                echo "ERROR: $so requires GLIBC_${VER} > 2.35 - package would not load"
+                FAIL=1
+              fi
+            else
+              echo "$(basename "$so"): no GLIBC version deps (bionic/NDK) OK"
+            fi
+          done
+          test -f "$WORK/lib/arm64-v8a/libsherpa-onnx-jni.so"
+          exit $FAIL
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" apk/*.apk \
-            --title "TypeFree ${{ github.ref_name }} · 本地离线 SenseVoice 引擎" \
+            --title "TypeFree ${{ github.ref_name }} - 本地离线 SenseVoice 引擎" \
             --generate-notes \
             --notes "## 本地离线语音识别引擎
 
           本版本在云端流式 ASR（Gemini Live / 百炼 / 豆包 / OpenAI 兼容）之外，新增**完全离线**的本地识别引擎：
 
-          - 📴 **FunASR SenseVoice-Small** (int8 ONNX ≈ 230MB) 直接内嵌 APK assets，安装即用
-          - 🔇 **silero VAD** 分句准流式：说完整句（约 0.45s 停顿）即出字，20s 长句自动切段
-          - 🌐 中 / 粤 / 英 / 日 / 韩自动检测，自带标点与数字规整
-          - 🔑 无需任何 API Key、零联网、零费用，语音不出手机
-          - ⚠️ 首次使用需加载模型（约 2-4s），推理峰值内存约 300MB，建议 6GB+ 内存设备
+          - FunASR SenseVoice-Small (int8 ONNX, ~230MB) 直接内嵌 APK assets，安装即用
+          - silero VAD 分句准流式：说完整句（约 0.45s 停顿）即出字，20s 长句自动切段
+          - 中 / 粤 / 英 / 日 / 韩自动检测，自带标点与数字规整
+          - 无需任何 API Key、零联网、零费用，语音不出手机
+          - 首次使用需加载模型（约 2-4s），推理峰值内存约 300MB，建议 6GB+ 内存设备
 
           ## 安装
 
