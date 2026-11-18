@@ -163,7 +163,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" apk/*.apk \
+          gh release create "${{ github.ref_name }}" apk/*.apk --repo "$GITHUB_REPOSITORY" \
             --title "TypeFree ${{ github.ref_name }} - 本地离线 SenseVoice 引擎" \
             --generate-notes \
             --notes "## 本地离线语音识别引擎
