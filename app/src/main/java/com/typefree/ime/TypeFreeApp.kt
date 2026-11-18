@@ -9,6 +9,7 @@ import com.typefree.ime.ime.engine.RimeDeploymentState
 import com.typefree.ime.ime.engine.RimeInputEngine
 import com.typefree.ime.ime.flypy.FlypyDictionary
 import com.typefree.ime.network.AiPipelineEngine
+import com.typefree.ime.network.asr.LocalSenseVoiceAsrClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,7 +43,9 @@ class TypeFreeApp : Application() {
         super.onCreate()
         instance = this
         repository = AppRepository(this)
-        aiEngine = AiPipelineEngine()
+        aiEngine = AiPipelineEngine(
+            localAsrClient = LocalSenseVoiceAsrClient(this)
+        )
         rimeDataManager = RimeDataManager(this)
         rimeInputEngine = RimeInputEngine(
             rimeBridge = rimeDataManager.rimeBridge,

@@ -29,6 +29,7 @@ import com.typefree.ime.privacy.RedactionSession
 import com.typefree.ime.network.asr.AsrSessionLimits
 import com.typefree.ime.network.asr.DashScopeStreamingAsrClient
 import com.typefree.ime.network.asr.GeminiLiveTranscribeClient
+import com.typefree.ime.network.asr.LocalSenseVoiceAsrClient
 import com.typefree.ime.network.asr.RotatingStreamingAsrSession
 import com.typefree.ime.network.asr.StreamingAsrClient
 import com.typefree.ime.network.asr.StreamingAsrSession
@@ -80,7 +81,8 @@ class AiPipelineEngine(
     private val httpClient: OkHttpClient = defaultHttpClient(),
     private val dashScopeAsrClient: StreamingAsrClient = DashScopeStreamingAsrClient(httpClient),
     private val volcengineAsrClient: StreamingAsrClient = VolcengineSaucAsrClient(httpClient),
-    private val geminiLiveAsrClient: StreamingAsrClient = GeminiLiveTranscribeClient(httpClient)
+    private val geminiLiveAsrClient: StreamingAsrClient = GeminiLiveTranscribeClient(httpClient),
+    private val localAsrClient: StreamingAsrClient
 ) {
 
     private val lastPrewarmedByOrigin = ConcurrentHashMap<String, Long>()
@@ -185,6 +187,11 @@ class AiPipelineEngine(
     fun prewarmLiveStreamingIfNeeded(settings: AppSettings) {
         if (settings.pipelineMode != PipelineMode.DUAL_STAGE) return
         val sttCfg = settings.sttConfig
+        // 本地引擎：提前把 230MB 模型加载进内存，避免首句识别卡顿
+        if (sttCfg.protocol == SttProtocol.LOCAL_SENSEVOICE) {
+            localAsrClient.prewarmSession(sttCfg, emptyList())
+            return
+        }
         if (sttCfg.protocol != SttProtocol.GEMINI_LIVE_WS || sttCfg.apiKey.isBlank()) return
         val hotwords = PromptBuilder.extractHotwordTerms(settings.dictionary)
         geminiLiveAsrClient.prewarmSession(sttCfg, hotwords)
@@ -216,6 +223,10 @@ class AiPipelineEngine(
             )
             SttProtocol.GEMINI_LIVE_WS -> RotatingStreamingAsrSession(
                 sessionFactory = { geminiLiveAsrClient.openSession(sttCfg, hotwords) },
+                limit = limit
+            )
+            SttProtocol.LOCAL_SENSEVOICE -> RotatingStreamingAsrSession(
+                sessionFactory = { localAsrClient.openSession(sttCfg, hotwords) },
                 limit = limit
             )
         }
@@ -294,6 +305,11 @@ class AiPipelineEngine(
                                 config = sttCfg,
                                 hotwords = hotwords
                             )
+                            SttProtocol.LOCAL_SENSEVOICE -> localAsrClient.transcribeWavFile(
+                                wavFile = wavFile,
+                                config = sttCfg,
+                                hotwords = hotwords
+                            )
                         }
                         sttElapsedMs = (System.currentTimeMillis() - sttStart).coerceAtLeast(0L)
                         transcribed
@@ -333,6 +349,7 @@ class AiPipelineEngine(
                         SttProtocol.ALIYUN_DASHSCOPE_WS -> "百炼流式"
                         SttProtocol.VOLCENGINE_SAUC_WS -> "豆包流式"
                         SttProtocol.GEMINI_LIVE_WS -> "Gemini Live"
+                        SttProtocol.LOCAL_SENSEVOICE -> "本地离线"
                     }
 
                     // If Speak-to-Edit / Help-me-write / Translate is active, LLM MUST run
@@ -610,6 +627,7 @@ class AiPipelineEngine(
                     "请先在「API 配置」中填写 Google Gemini API Key"
                 } else null
             }
+            SttProtocol.LOCAL_SENSEVOICE -> null // 本地引擎无需任何 Key，模型随 APK 分发
         } ?: return null
 
         val isMissingKey = sttCfg.apiKey.isBlank()
@@ -1236,10 +1254,12 @@ class AiPipelineEngine(
                     }
                     val hotwords = PromptBuilder.extractHotwordTerms(settings.dictionary)
                     val bias = PromptBuilder.buildSttBiasPrompt(settings.dictionary)
-                    if (effectiveStt.protocol == SttProtocol.GEMINI_LIVE_WS) {
-                        transcribeGeminiWavWithFastFallback(wavFile, effectiveStt, hotwords)
-                    } else {
-                        transcribeWithOpenAiStt(wavFile, effectiveStt, bias)
+                    when {
+                        effectiveStt.protocol == SttProtocol.GEMINI_LIVE_WS ->
+                            transcribeGeminiWavWithFastFallback(wavFile, effectiveStt, hotwords)
+                        effectiveStt.protocol == SttProtocol.LOCAL_SENSEVOICE ->
+                            localAsrClient.transcribeWavFile(wavFile, effectiveStt, hotwords)
+                        else -> transcribeWithOpenAiStt(wavFile, effectiveStt, bias)
                     }
                 }
                 userBottomLine.isNotBlank() -> userBottomLine.trim()

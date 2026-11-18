@@ -216,6 +216,9 @@ object ApiConfigBackupHelper {
     }
 
     fun sttModelSuggestions(presetId: String, protocol: SttProtocol = SttProtocol.OPENAI_HTTP): List<String> {
+        if (protocol == SttProtocol.LOCAL_SENSEVOICE || presetId == "local_sensevoice") {
+            return listOf("sense-voice-small")
+        }
         if (protocol == SttProtocol.GEMINI_LIVE_WS || presetId == "gemini_live_ws") {
             return listOf("gemini-3.5-transcribe-live")
         }

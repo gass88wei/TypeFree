@@ -1131,7 +1131,22 @@ private fun UnifiedWorkflowRoutingCard(
                                 onSelect = onSelectSttProvider
                             )
 
-                            if (settings.sttConfig.protocol == SttProtocol.GEMINI_LIVE_WS) {
+                            if (settings.sttConfig.protocol == SttProtocol.LOCAL_SENSEVOICE) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = TypeFreeEmerald.copy(alpha = 0.10f),
+                                    border = BorderStroke(1.dp, TypeFreeEmerald.copy(alpha = 0.42f))
+                                ) {
+                                    Text(
+                                        text = "📴 本地离线 SenseVoice 已激活：FunASR 模型内嵌 APK 全程离线识别，无需 API Key、语音不出手机；说完整句（约 0.45s 停顿）即分句出字，中/粤/英/日/韩自动检测。",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        lineHeight = 16.sp,
+                                        modifier = Modifier.padding(10.dp)
+                                    )
+                                }
+                            } else if (settings.sttConfig.protocol == SttProtocol.GEMINI_LIVE_WS) {
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(10.dp),
@@ -1545,6 +1560,7 @@ private fun AdvancedParametersDrawerContent(
     if (settings.pipelineMode == PipelineMode.DUAL_STAGE) {
         val sttEndpoint = remember(settings.sttConfig.baseUrl, settings.sttConfig.protocol) {
             when (settings.sttConfig.protocol) {
+                SttProtocol.LOCAL_SENSEVOICE -> "本地离线识别（模型内嵌 APK，无需网络）"
                 SttProtocol.OPENAI_HTTP -> EndpointResolver.resolveSttEndpoint(settings.sttConfig.baseUrl)
                 SttProtocol.ALIYUN_DASHSCOPE_WS -> EndpointResolver.resolveDashScopeWsEndpoint(settings.sttConfig.baseUrl)
                 SttProtocol.VOLCENGINE_SAUC_WS -> EndpointResolver.resolveVolcengineSaucWsEndpoint(settings.sttConfig.baseUrl)

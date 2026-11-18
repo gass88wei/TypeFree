@@ -56,5 +56,9 @@ release/
 # Local private dictionaries & Rime backups (contains personal local tables)
 local_private/
 
+# Local offline ASR models (SenseVoice-Small int8 ≈230MB + silero VAD):
+# fetched by CI or symlinked from local smartsub install, never committed
+local_sherpa/
+
 # Log files
 *.log

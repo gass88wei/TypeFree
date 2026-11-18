@@ -16,7 +16,8 @@ enum class SttProtocol(val label: String, val shortBadge: String) {
     OPENAI_HTTP("OpenAI 兼容 HTTP 整包", "HTTP"),
     ALIYUN_DASHSCOPE_WS("阿里云百炼 WebSocket 实时流式", "百炼流式"),
     VOLCENGINE_SAUC_WS("火山豆包 WebSocket 实时流式", "豆包流式"),
-    GEMINI_LIVE_WS("Google Gemini Live 智能流式", "Gemini 流式")
+    GEMINI_LIVE_WS("Google Gemini Live 智能流式", "Gemini 流式"),
+    LOCAL_SENSEVOICE("本地离线 SenseVoice（VAD 准流式）", "本地离线")
 }
 
 enum class ThemePreference(val label: String) {

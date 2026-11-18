@@ -204,6 +204,7 @@ object SetupStatsHelper {
             PipelineMode.DUAL_STAGE -> {
                 val stt = settings.sttConfig
                 val sttOk = when (stt.protocol) {
+                    SttProtocol.LOCAL_SENSEVOICE -> true
                     SttProtocol.OPENAI_HTTP -> stt.baseUrl.isNotBlank() &&
                         (stt.model.isNotBlank() || EndpointResolver.isDeepSeekAsrEndpoint(stt.baseUrl)) &&
                         (stt.apiKey.isNotBlank() || AiPipelineEngine.isLocalEndpoint(stt.baseUrl))
@@ -236,6 +237,7 @@ object SetupStatsHelper {
         return when (settings.pipelineMode) {
             PipelineMode.DUAL_STAGE -> {
                 val sttShort = when (settings.sttConfig.protocol) {
+                    SttProtocol.LOCAL_SENSEVOICE -> "本地离线"
                     SttProtocol.OPENAI_HTTP -> if (EndpointResolver.isDeepSeekAsrEndpoint(settings.sttConfig.baseUrl) ||
                         settings.sttConfig.presetId == "deepseek_asr"
                     ) {

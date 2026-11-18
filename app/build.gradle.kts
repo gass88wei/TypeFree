@@ -90,6 +90,11 @@ android {
         buildConfig = true
     }
 
+    androidResources {
+        // ONNX 模型（本地 SenseVoice / silero VAD）不压缩，保证 AssetManager 直接 mmap
+        noCompress += "onnx"
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -99,6 +104,26 @@ android {
     val privateDictDir = rootProject.file("local_private")
     val stagedPrivateAssetsDir = layout.buildDirectory.dir("generated/privateDictAssets")
 
+    // 本地离线语音引擎（FunASR SenseVoice-Small int8 + silero VAD），由 CI 下载或本地
+    // 软链到根目录 local_sherpa/（不进 git）。三个文件齐备才注入 APK assets/sherpa/。
+    val localAsrDir = rootProject.file("local_sherpa")
+    val hasLocalAsrModel = listOf("model.int8.onnx", "tokens.txt", "silero_vad.onnx")
+        .all { localAsrDir.resolve(it).isFile }
+    val stagedLocalAsrAssetsDir = layout.buildDirectory.dir("generated/localAsrAssets")
+
+    if (hasLocalAsrModel) {
+        val stageLocalAsrAssets = tasks.register<Sync>("stageLocalAsrAssets") {
+            from(localAsrDir) {
+                include("model.int8.onnx", "tokens.txt", "silero_vad.onnx")
+                into("sherpa")
+            }
+            into(stagedLocalAsrAssetsDir)
+        }
+        tasks.named("preBuild") {
+            dependsOn(stageLocalAsrAssets)
+        }
+    }
+
     if (usePrivateDict && privateDictDir.exists()) {
         val stagePrivateFlypyAssets = tasks.register<Sync>("stagePrivateFlypyAssets") {
             from("src/main/assets") {
@@ -106,6 +131,12 @@ android {
             }
             from(privateDictDir) {
                 include("flypy_dict.tsv", "flypy_dz.tsv")
+            }
+            if (hasLocalAsrModel) {
+                from(localAsrDir) {
+                    include("model.int8.onnx", "tokens.txt", "silero_vad.onnx")
+                    into("sherpa")
+                }
             }
             into(stagedPrivateAssetsDir)
         }
@@ -117,7 +148,13 @@ android {
     sourceSets {
         getByName("main") {
             if (usePrivateDict && privateDictDir.exists()) {
-                assets.setSrcDirs(listOf(stagedPrivateAssetsDir))
+                if (hasLocalAsrModel) {
+                    assets.setSrcDirs(listOf(stagedPrivateAssetsDir, stagedLocalAsrAssetsDir))
+                } else {
+                    assets.setSrcDirs(listOf(stagedPrivateAssetsDir))
+                }
+            } else if (hasLocalAsrModel) {
+                assets.setSrcDirs(listOf("src/main/assets", stagedLocalAsrAssetsDir))
             }
         }
     }
@@ -125,6 +162,13 @@ android {
 
 dependencies {
     implementation(project(":rime"))
+
+    // sherpa-onnx JNI runtime (本地离线 SenseVoice 引擎)；AAR 已提交进仓库，
+    // 本地与 CI 构建均无需额外下载
+    val sherpaAar = file("libs/sherpa-onnx-2.0.1.aar")
+    if (sherpaAar.exists()) {
+        implementation(files(sherpaAar))
+    }
 
     val composeBom = platform("androidx.compose:compose-bom:2025.04.01")
     implementation(composeBom)

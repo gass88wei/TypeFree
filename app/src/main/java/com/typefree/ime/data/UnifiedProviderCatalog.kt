@@ -27,9 +27,22 @@ object UnifiedProviderCatalog {
     const val ID_ALIYUN = "aliyun_bailian"
     const val ID_SILICONFLOW = "siliconflow"
     const val ID_DEEPSEEK = "deepseek"
+    const val ID_LOCAL = "local_sensevoice"
     const val ID_CUSTOM = "custom_gateway"
 
     val providers: List<UnifiedProviderSpec> = listOf(
+        UnifiedProviderSpec(
+            id = ID_LOCAL,
+            name = "本地离线",
+            badge = "零联网零费用",
+            summary = "内嵌 FunASR SenseVoice-Small (~230MB) 全离线识别：VAD 分句准流式，无需任何 API Key，语音不出手机",
+            defaultBaseUrl = "",
+            supportsStt = true,
+            supportsLlm = false,
+            supportsMultimodal = false,
+            defaultSttModel = "sense-voice-small",
+            defaultSttProtocol = SttProtocol.LOCAL_SENSEVOICE
+        ),
         UnifiedProviderSpec(
             id = ID_GOOGLE,
             name = "Google Gemini",
@@ -118,6 +131,7 @@ object UnifiedProviderCatalog {
     )
 
     val sttSuggestedModelsByProvider: Map<String, List<String>> = mapOf(
+        ID_LOCAL to listOf("sense-voice-small"),
         ID_GOOGLE to listOf("gemini-3.5-transcribe-live"),
         ID_ALIYUN to listOf("paraformer-realtime-v2", "fun-asr-realtime", "gummy-realtime-v1"),
         ID_VOLCENGINE to listOf("bigmodel"),
@@ -173,6 +187,7 @@ object UnifiedProviderCatalog {
     fun inferSttProviderId(stt: SttConfig): String {
         val url = stt.baseUrl.trim().trimEnd('/').lowercase()
         return when {
+            stt.protocol == SttProtocol.LOCAL_SENSEVOICE || stt.presetId == "local_sensevoice" -> ID_LOCAL
             stt.protocol == SttProtocol.GEMINI_LIVE_WS || stt.presetId == "gemini_live_ws" -> ID_GOOGLE
             stt.protocol == SttProtocol.ALIYUN_DASHSCOPE_WS || url.contains("aliyuncs.com") || url.contains("dashscope") -> ID_ALIYUN
             stt.protocol == SttProtocol.VOLCENGINE_SAUC_WS || url.contains("bytedance.com") || url.contains("volces.com") -> ID_VOLCENGINE
@@ -204,6 +219,7 @@ object UnifiedProviderCatalog {
     }
 
     fun isCredentialReady(providerId: String, cred: ProviderCredential?): Boolean {
+        if (providerId == ID_LOCAL) return true // 本地引擎无需任何凭证
         if (cred == null) return false
         return when (providerId) {
             ID_VOLCENGINE -> cred.apiKey.isNotBlank() || cred.sttApiKey.isNotBlank()
@@ -221,6 +237,7 @@ object UnifiedProviderCatalog {
     }
 
     fun hasConfiguredSttCredential(stt: SttConfig): Boolean {
+        if (stt.protocol == SttProtocol.LOCAL_SENSEVOICE) return true
         if (stt.apiKey.isNotBlank()) return true
         return stt.protocol == SttProtocol.OPENAI_HTTP && isLocalUrl(stt.baseUrl)
     }
@@ -388,6 +405,22 @@ object UnifiedProviderCatalog {
         val cred = vault[providerId] ?: ProviderCredential(providerId)
 
         return when (providerId) {
+            ID_LOCAL -> {
+                // 本地 STT 只接管听音阶段：润色 / 军师继续沿用用户已配置的云端 LLM
+                settings.copy(
+                    providerVault = vault,
+                    pipelineMode = PipelineMode.DUAL_STAGE,
+                    sttConfig = settings.sttConfig.copy(
+                        presetId = "local_sensevoice",
+                        protocol = SttProtocol.LOCAL_SENSEVOICE,
+                        baseUrl = "",
+                        apiKey = "",
+                        appId = "",
+                        model = "sense-voice-small"
+                    )
+                )
+            }
+
             ID_GOOGLE -> {
                 val baseUrl = cred.customBaseUrl.ifBlank { specFor(ID_GOOGLE).defaultBaseUrl }
                 settings.copy(
@@ -582,6 +615,14 @@ object UnifiedProviderCatalog {
         val cred = vault[providerId] ?: ProviderCredential(providerId)
         val spec = specFor(providerId)
         val nextStt = when (providerId) {
+            ID_LOCAL -> settings.sttConfig.copy(
+                presetId = "local_sensevoice",
+                protocol = SttProtocol.LOCAL_SENSEVOICE,
+                baseUrl = "",
+                apiKey = "",
+                appId = "",
+                model = spec.defaultSttModel
+            )
             ID_GOOGLE -> settings.sttConfig.copy(
                 presetId = "gemini_live_ws",
                 protocol = SttProtocol.GEMINI_LIVE_WS,
@@ -752,6 +793,7 @@ object UnifiedProviderCatalog {
         cred: ProviderCredential
     ): SttConfig {
         return when (providerId) {
+            ID_LOCAL -> stt.copy(apiKey = "") // 本地引擎无凭证可同步
             ID_VOLCENGINE -> stt.copy(
                 apiKey = cred.sttApiKey.ifBlank { cred.apiKey },
                 appId = cred.appId

@@ -1,0 +1,120 @@
+name: Build TypeFree
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Fetch local offline ASR models (SenseVoice-Small int8 + silero VAD)
+        run: |
+          mkdir -p local_sherpa
+          curl -L --retry 3 --retry-delay 5 -C - -o /tmp/sensevoice.tar.bz2 \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2
+          tar -xjf /tmp/sensevoice.tar.bz2 -C /tmp
+          cp "/tmp/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/model.int8.onnx" local_sherpa/
+          cp "/tmp/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09/tokens.txt" local_sherpa/
+          curl -L --retry 3 --retry-delay 5 -C - -o local_sherpa/silero_vad.onnx \
+            https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx
+          echo "===== local_sherpa ====="
+          ls -la local_sherpa/
+          test -s local_sherpa/model.int8.onnx
+          test -s local_sherpa/tokens.txt
+          test -s local_sherpa/silero_vad.onnx
+
+      - name: Build APK (release, debug-signed fallback)
+        run: ./gradlew :app:assembleRelease --no-daemon
+
+      - name: Smoke-check APK (launchability + GLIBC guard, exits 1 on failure)
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "Checking $APK"
+
+          # 1) APK must be a valid zip with a readable manifest
+          unzip -t "$APK" > /dev/null
+          BADGING="$("$ANDROID_HOME/build-tools/34.0.0/aapt2" dump badging "$APK")"
+          echo "$BADGING" | grep -E "^package: name='com.typefree.ime'"
+          echo "$BADGING" | grep -E "native-code: .*arm64-v8a"
+
+          # 2) GLIBC guard: every packaged native lib must not require GLIBC_2.36+
+          #    (Deepin 25 ships glibc 2.38; anything above 2.35 breaks desktop hosts)
+          WORK=$(mktemp -d)
+          unzip -o -q "$APK" 'lib/*/*.so' -d "$WORK"
+          FAIL=0
+          for so in "$WORK"/lib/*/*.so; do
+            MAXSYM=$(readelf -V "$so" 2>/dev/null | grep -oE 'GLIBC_2\.[0-9]+' | sort -uV | tail -1 || true)
+            if [ -n "$MAXSYM" ]; then
+              VER=${MAXSYM#GLIBC_}
+              MAJOR=${VER%%.*}; MINOR=${VER##*.}
+              echo "$(basename "$so"): max ${MAXSYM}"
+              if [ "$MAJOR" -gt 2 ] || { [ "$MAJOR" -eq 2 ] && [ "$MINOR" -gt 35 ]; }; then
+                echo "ERROR: $so requires GLIBC_${VER} > 2.35 — package would not load"
+                FAIL=1
+              fi
+            else
+              echo "$(basename "$so"): no GLIBC version deps (bionic/NDK) OK"
+            fi
+          done
+          # sherpa-onnx JNI must be present for the local offline engine
+          test -f "$WORK/lib/arm64-v8a/libsherpa-onnx-jni.so"
+          exit $FAIL
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TypeFree-apk
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 14
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TypeFree-apk
+          path: apk
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" apk/*.apk \
+            --title "TypeFree ${{ github.ref_name }} · 本地离线 SenseVoice 引擎" \
+            --generate-notes \
+            --notes "## 本地离线语音识别引擎
+
+          本版本在云端流式 ASR（Gemini Live / 百炼 / 豆包 / OpenAI 兼容）之外，新增**完全离线**的本地识别引擎：
+
+          - 📴 **FunASR SenseVoice-Small** (int8 ONNX ≈ 230MB) 直接内嵌 APK assets，安装即用
+          - 🔇 **silero VAD** 分句准流式：说完整句（约 0.45s 停顿）即出字，20s 长句自动切段
+          - 🌐 中 / 粤 / 英 / 日 / 韩自动检测，自带标点与数字规整
+          - 🔑 无需任何 API Key、零联网、零费用，语音不出手机
+          - ⚠️ 首次使用需加载模型（约 2-4s），推理峰值内存约 300MB，建议 6GB+ 内存设备
+
+          ## 安装
+
+          下载下方 APK 直接安装（debug 签名测试版，如需覆盖安装请先卸载旧版）。"
